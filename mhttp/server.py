@@ -1,6 +1,7 @@
 import io
-import os.path
 import socket
+import traceback
+
 from utils import BufferedSocket
 from mhttp import ServerSocketWrapper
 from concurrent.futures import ThreadPoolExecutor
@@ -12,36 +13,19 @@ HTTP2 = 'HTTP/2'
 
 
 def default_logger(error: Exception):
+    print(error)
     print(error.args)
+    traceback.print_exc()
 
 
 class HttpServer:
-    server_name = "wgwgqwgqg"
+    server_name = ''
 
-    def handle_request_test(self, request: HttpRequest):
-        t = request.content_type
-        if t.startswith(content_types.MULTIPART_FORM):
-            a = request.files_list
-            for file in a:
-                file.copy_to(os.path.join('stuff', file.filename))
-            b = request.form
-            for field in b:
-                print(field)
-        elif t.startswith(content_types.JSON):
-            print(request.json)
-        elif t.startswith(content_types.URL_FORM):
-            for field in request.form:
-                print(field)
-        resp = HttpResponse(200, HTTP1_1)
-        resp.headers[header_keys.SERVER] = self.server_name
-        resp.keep_connection = request.keep_connection
-        return resp
-
-    def __init__(self, handler=None, logger=None):
+    def __init__(self, handler, logger=None):
         if callable(handler):
-            self.handle_request = handler
+            self.handler = handler
         else:
-            self.handle_request = self.handle_request_test
+            raise ValueError("handler must be a callable object")
         if callable(logger):
             self.log_error = logger
         else:
@@ -51,12 +35,17 @@ class HttpServer:
         msg = None
         if error and error.args:
             msg = str(error.args[0])
-        resp = HttpResponse(code, protocol)
-        resp.headers[header_keys.SERVER] = self.server_name
+        resp = HttpResponse(code)
+        resp.protocol = protocol
+        if self.server_name:
+            resp.headers[header_keys.SERVER] = self.server_name
         msg = msg.encode()
         if msg:
             resp.set_body(io.BytesIO(msg), len(msg))
         return resp
+
+    def handle_request(self, request: HttpRequest) -> HttpResponse:
+        return self.handler(request)
 
     def handle_client(self, sock: socket.socket, protocol):
         with BufferedSocket(sock) as sock:
@@ -64,37 +53,35 @@ class HttpServer:
             while True:
                 try:
                     request = ssw.get_request()
-                except TimeoutError:
-                    ssw.send_response(self.error_resp(status_codes.REQUEST_TIMEOUT, protocol))
-                    return
                 except HttpError as e:
                     ssw.send_response(self.error_resp(e.code, protocol, e))
-                    return
+                    break
                 except OSError:
                     self.log_error(e)
-                    return
+                    break
                 except Exception as e:
                     self.log_error(e)
                     ssw.send_response(self.error_resp(status_codes.INTERNAL_SERVER_ERROR, protocol))
-                    return
+                    break
                 try:
                     response = self.handle_request(request)
-                except TimeoutError:
-                    ssw.send_response(self.error_resp(status_codes.REQUEST_TIMEOUT, protocol))
+                    response.protocol = request.protocol
                 except HttpError as e:
                     ssw.send_response(self.error_resp(e.code, protocol, e))
-                except OSError as e:
-                    self.log_error(e)
+                    break
                 except Exception as e:
                     self.log_error(e)
                     ssw.send_response(self.error_resp(status_codes.INTERNAL_SERVER_ERROR, protocol))
+                    break
+                finally:
+                    request.delete()
                 try:
                     ssw.send_response(response)
                 except Exception as e:
                     self.log_error(e)
-                    return
+                    break
                 if not response.keep_connection:
-                    return
+                    break
 
     def handle_http_client(self, sock: socket.socket):
         self.handle_client(sock,  HTTP1_1)
@@ -110,12 +97,3 @@ class HttpServer:
         while True:
             conn, addr = listener.accept()
             executor.submit(self.handle_http_client, conn)
-
-
-def main():
-    server = HttpServer()
-    server.run()
-
-
-if __name__ == '__main__':
-    main()

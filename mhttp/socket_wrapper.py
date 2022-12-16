@@ -1,7 +1,8 @@
 import io
 import socket
 from mhttp.constants import status_codes, header_keys, content_types
-from mhttp.messages import HttpRequest, HttpResponse, HttpError
+from mhttp import HttpRequest, HttpResponse
+from mhttp.helpers import HttpError
 from mhttp.files import TempFileFactory
 import time
 import pprint
@@ -125,14 +126,18 @@ class HttpSocketWrapper(ABC):
         if not content_headers:
             return None
         content_type, length, encoding = content_headers
-        body_factory = TempFileFactory(self.max_body_ram, encoding)
         trailer_keys = headers.get(header_keys.TRAILER)
-        if length:
-            self.__read_chunk(body_factory, length)
-        else:
-            trailer = self.__read_body_chunked(body_factory, trailer_keys)
-            if trailer:
-                headers.update(trailer)
+        body_factory = TempFileFactory(self.max_body_ram, encoding)
+        try:
+            if length:
+                self.__read_chunk(body_factory, length)
+            else:
+                trailer = self.__read_body_chunked(body_factory, trailer_keys)
+                if trailer:
+                    headers.update(trailer)
+        except Exception as e:
+            body_factory.clear()
+            raise e
         self.reset_timers()
         file = body_factory.get_file()
         body_factory.clear()

@@ -1,6 +1,9 @@
+import datetime
+import io
+import mimetypes
 import os
 from wsgiref.handlers import format_date_time
-from typing import Optional, List, Dict, Any, IO
+from typing import Optional, List, Dict, Union, IO
 from functools import cached_property
 from utils.mcollections.mydicts import CaseInsensitiveDict
 from utils.mcollections import ReadOnlyDict
@@ -50,6 +53,7 @@ class HttpCookie:
 
 class HttpRequest:
     fields_limit = 1000
+    server_name = ''
 
     def __init__(self, protocol: str,
                  route: str,
@@ -125,7 +129,7 @@ class HttpRequest:
         self.check_form()
         return FormReader(self.body.open_stream(), self.multipart_boundary)
 
-    def form_to_folder(self, folder: str) -> Dict[CopiedFile]:
+    def form_to_folder(self, folder: str) -> Dict[str, CopiedFile]:
         """
         Loads a form and downloads all the files to the given folder
         :param folder: the folder
@@ -196,15 +200,17 @@ def _capitalize_header(header: str):
 
 class HttpResponse:
 
-    def __init__(self, code: int, protocol: str):
-        self.protocol = protocol
+    def __init__(self, code=200):
+        self.protocol = None
         self.code = code
         self.headers = CaseInsensitiveDict()
         self.cookies = dict()
-        self.__body = None
+        self.__body: Optional[IO] = None
         self.__chunk_size = 0
 
     def get_header_string(self) -> bytes:
+        if not self.protocol:
+            raise ValueError("Protocol not set")
         if header_keys.CONTENT_LENGTH in self.headers:
             length = self.headers.pop(header_keys.CONTENT_LENGTH)
         else:
@@ -222,13 +228,22 @@ class HttpResponse:
     def chunk_size(self):
         return self.__chunk_size
 
-    def set_body(self, body: IO, size: int):
+    @property
+    def content_type(self):
+        return self.headers.get(header_keys.CONTENT_TYPE)
+
+    @content_type.setter
+    def content_type(self, value: str):
+        self.headers[header_keys.CONTENT_TYPE] = value
+
+    def set_body(self, body: Optional[IO], size: int):
         """
         Set the Response body with content of a known length
-        :param body: the vbody itself
-        :param size:
-        :return:
+        :param body: the body itself
+        :param size: length of the body
         """
+        if header_keys.TRANSFER_ENCODING in self.headers:
+            del self.headers[header_keys.TRANSFER_ENCODING]
         self.__chunk_size = 0
         self.__body = body
         self.headers[header_keys.CONTENT_LENGTH] = str(size)
@@ -267,19 +282,77 @@ class HttpResponse:
                     HttpCookie(name, value, path, expire_date, max_age, http_only, secure, same_site, domain)
 
 
-def main():
-    form_ex = open('form.txt', 'rb')
-    stream = FormReader(form_ex, '--------------------------408853281213317803450759')
-    print(stream.next_field())
+def make_response(body=None, headers=None, code=200):
+    """
+    Generartes a response
+    :param body:
+    :param headers:
+    :param code:
+    :return:
+    """
+    resp = HttpResponse(code)
+    if headers:
+        resp.headers.update(headers)
+    if not body:
+        return resp
+    elif isinstance(body, str):
+        body = body.encode()
+        resp.set_body(io.BytesIO(body), len(body))
+        resp.content_type = content_types.TEXT_PLAIN
+    elif isinstance(body, (bytes, bytearray)):
+        resp.set_body(io.BytesIO(body), len(body))
+        resp.content_type = content_types.OCTET_STREAM
+    else:
+        json = myjson.serialize_JSON(body).encode()
+        resp.set_body(io.BytesIO(json), len(json))
+        resp.content_type = content_types.JSON
+    return resp
 
-    stream.copy_field('a.txt')
-    print(stream.next_field())
-    print(stream.next_field())
-    print('third', stream.read().decode())
-    print(stream.next_field())
-    print('4th', stream.read().decode())
-    stream.close()
 
-
-if __name__ == '__main__':
-    main()
+def file_response(src: Union[str, IO], name=None, attachment=False,
+                  content_type=None, last_modified: datetime.datetime = None):
+    """
+    Returns a response with a file
+    :param src: path or stream of the file
+    :param name: name of the file. If not provided the name will be based on the path. If a path is not provided,
+    filename will be 'file' and the extension will be base on the content type. If neither are provided,
+    the filename will be 'file.bin'
+    :param attachment: True if the file should be an attachment
+    :param content_type: File MIME type. If not provided, it will be based on the file name. If neither are provided,
+    it will be 'application/octet-stream'
+    :param last_modified: time when the file was last modified
+    """
+    resp = HttpResponse()
+    length = None
+    enc = None
+    if last_modified:
+        last_modified = last_modified.timestamp()
+    if isinstance(src, str):
+        stream = open(src, 'rb')
+        if not last_modified:
+            last_modified = os.path.getmtime(src)
+        if not name:
+            name = ''.join(os.path.splitext(src))
+        if not content_type:
+            content_type, enc = mimetypes.guess_type(name)
+        length = os.stat(src).st_size
+    else:
+        stream = src
+        if not content_type:
+            content_type = content_types.OCTET_STREAM
+        if not name:
+            name = 'file' + mimetypes.guess_extension(content_type)
+    content_dis = 'attachment' if attachment else 'inline' + f'; filename=\"{name}\"'
+    resp.headers.update({
+        header_keys.CONTENT_TYPE: content_type,
+        header_keys.CONTENT_DISPOSITION: content_dis
+    })
+    if enc:
+        resp.headers[header_keys.CONTENT_ENCODING] = enc
+    if last_modified:
+        resp.headers[header_keys.LAST_MODIFIED] = format_date_time(last_modified)
+    if length:
+        resp.set_body(stream, length)
+    else:
+        resp.set_body_chunked(stream)
+    return resp

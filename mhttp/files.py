@@ -208,6 +208,7 @@ class TempFileFactory:
         """
         if self.__stream:
             self.__stream.close()
+            self.__stream = None
             return TempFileBig(self.__path, self.size)
         return TempFileSmall(bytes(self.__content))
 

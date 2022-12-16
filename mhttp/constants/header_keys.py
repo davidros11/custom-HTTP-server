@@ -14,6 +14,7 @@ CONTENT_LENGTH = 'Content-Length'
 CONTENT_LOCATION = 'Content-Location'
 CONTENT_TYPE = 'Content-Type'
 HOST = "Host"
+LAST_MODIFIED = 'Last-Modified'
 USER_AGENT = 'User-Agent'
 LOCATION = 'Location'
 SET_COOKIE = 'Set-Cookie'
