@@ -1,0 +1,12 @@
+{
+  "limits": {
+      "http": {
+        "bodyLimit": 30000000,
+        "headerLimit": 32000,
+        "jsonLimit":  100000,
+        "bodyBufferRamLimit": 128000,
+        "formFileRamBufferLimit": 64000,
+        "formTotalRamBufferLimit": 256000
+    }
+  }
+}
