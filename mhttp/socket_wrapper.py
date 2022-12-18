@@ -60,6 +60,7 @@ class HttpSocketWrapper(ABC):
         self.max_headers_size = 32000
         self.__buffer = bytes()
         self.__bytes_read = 1024
+        self.chunk_size = 1024
         self._remaining_time = self.request_timeout
         self._remaining_size = self.max_content_length
         self._remaining_header_size = self.max_headers_size
@@ -153,9 +154,9 @@ class HttpSocketWrapper(ABC):
                 return
             self.__socket.send(to_send)
 
-    def _send_chunked(self, stream: IO, chunk_size: int):
+    def _send_chunked(self, stream: IO,):
         while True:
-            read = stream.read(chunk_size)
+            read = stream.read(self.chunk_size)
             length = len(read)
             len_hex = hex(length)[2:].encode()
             self.__socket.send(len_hex + b'\r\n')
@@ -197,7 +198,7 @@ class ServerSocketWrapper(HttpSocketWrapper):
         if not response.body:
             return
         if response.is_chunked:
-            self._send_chunked(response.body, response.chunk_size)
+            self._send_chunked(response.body)
         else:
             self._send(response.body)
 
@@ -228,7 +229,7 @@ def main():
             response = HttpResponse(code, protocol)
             response.headers.update(headers)
             json = io.BytesIO('{"aaa": "500"}'.encode())
-            response.set_body_chunked(json)
+            response.set_body(json)
             with response.body:
                 abo.send_response(response)
             req.delete()

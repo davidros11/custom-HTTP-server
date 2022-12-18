@@ -149,7 +149,7 @@ class TempFileBig(TempFile):
         shutil.copy(self.path, dest_path)
 
     def delete(self):
-        if os.path.isfile(self.path):
+        if self.path and os.path.isfile(self.path):
             os.remove(self.path)
         self.path = None
 

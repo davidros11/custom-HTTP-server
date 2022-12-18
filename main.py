@@ -1,5 +1,5 @@
 import os
-from mhttp import make_response, HttpRequest, file_response, HttpServer
+from mhttp import HttpRequest, HttpResponse, file_response, HttpServer
 from mhttp.constants import content_types
 
 
@@ -26,7 +26,9 @@ def post_test(request: HttpRequest):
     elif t.startswith(content_types.URL_FORM):
         for field in request.form:
             print(field)
-    resp = make_response()
+    else:
+        print(request.body.data)
+    resp = HttpResponse()
     resp.keep_connection = request.keep_connection
     return resp
 

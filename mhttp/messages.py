@@ -1,9 +1,10 @@
 import datetime
+import inspect
 import io
 import mimetypes
 import os
 from wsgiref.handlers import format_date_time
-from typing import Optional, List, Dict, Union, IO
+from typing import Optional, List, Dict, Union, BinaryIO
 from functools import cached_property
 from utils.mcollections.mydicts import CaseInsensitiveDict
 from utils.mcollections import ReadOnlyDict
@@ -12,6 +13,7 @@ from utils import myjson
 from mhttp.helpers import is_text, get_header_param, HttpError
 from mhttp.form import FormReader, parse_form, FormFile, CopiedFile
 from mhttp.files import TempFile
+from io import BufferedIOBase
 
 
 class HttpCookie:
@@ -198,35 +200,133 @@ def _capitalize_header(header: str):
             return ''.join(char_list)
 
 
-class HttpResponse:
+# class HeaderValue:
+#     def __init__(self, header: str):
+#         self.values = set(header.split(','))
+#
+#     def __str__(self):
+#         return ','.join(self.values)
+#
+#     def add(self, value: str):
+#         self.values.add(value)
+#
+#     def remove(self, item: str):
+#         self.values.remove(item)
 
-    def __init__(self, code=200):
+
+class HttpResponse:
+    first_headers = tuple([header_keys.SERVER])
+    last_headers = (header_keys.TRAILER,
+                    header_keys.CONTENT_DISPOSITION,
+                    header_keys.CONTENT_TYPE,
+                    header_keys.TRANSFER_ENCODING,
+                    header_keys.CONTENT_LANGUAGE,
+                    header_keys.CONTENT_LOCATION,
+                    header_keys.TRANSFER_ENCODING,
+                    header_keys.CONTENT_LENGTH)
+
+    def __init__(self, body=None, code=200):
+
         self.protocol = None
         self.code = code
-        self.headers = CaseInsensitiveDict()
-        self.cookies = dict()
-        self.__body: Optional[IO] = None
-        self.__chunk_size = 0
+        self.__headers: CaseInsensitiveDict[str, str] = CaseInsensitiveDict()
+        self.cookies: Dict[str, HttpCookie] = dict()
+        self.__body: Optional[BinaryIO] = None
+        if body:
+            self.set_body(body)
+        else:
+            self.__set_content_length(0)
+
+    def set_header_order(self, first_headers: tuple = None, last_headers: tuple = None):
+        """
+        Determines the order in which the headers show up in get_header_string().
+        Order is first_headers -> all other headers -> cookies -> last headers
+        :param first_headers: Keys for the headers that will show up first in the header string
+        :param last_headers: Keys for the headers that will show up last in the header string.
+        """
+        if first_headers is not None:
+            self.first_headers = first_headers
+        if last_headers is not None:
+            self.last_headers = last_headers
+
+    def get_header_order(self):
+        """
+        Determines the order in which the headers show up in get_header_string().
+        Order is first_headers -> all other headers -> cookies -> last headers
+        :return: first_headers and last_headers as lists
+
+        """
+        return self.first_headers, self.last_headers
+
+    @property
+    def headers(self):
+        return self.__headers
+
+    @headers.setter
+    def headers(self, headers: dict):
+        self.__headers = CaseInsensitiveDict(headers)
+
+    def set_body(self, body, length: int = None):
+        """
+        Sets the response body
+        :param body: a string, bytes, bytearray, Binary stream, or some other object that will be converted to JSON.
+        If a binary stream is provided without a length, the response will be chunked
+        :param length: The length of the body. This parameter is ignored if the body parameter is not a stream
+        """
+        if not body:
+            return
+        if isinstance(body, str):
+            body = body.encode()
+            self.set_body_stream(io.BytesIO(body), len(body))
+            self.content_type = content_types.TEXT_PLAIN
+        elif isinstance(body, (bytes, bytearray)):
+            self.set_body_stream(io.BytesIO(body), len(body))
+            self.content_type = content_types.OCTET_STREAM
+        elif isinstance(body, BufferedIOBase):
+            self.set_body_stream(body, length)
+            self.content_type = content_types.OCTET_STREAM
+        else:
+            try:
+                json = myjson.serialize_JSON(body).encode()
+            except TypeError:
+                raise TypeError("body argument must be str, bytes, or a type that can be serialzied with JSON")
+            self.set_body_stream(io.BytesIO(json), len(json))
+            self.content_type = content_types.JSON
+
+    @property
+    def content_length(self):
+        cl = self.headers.get(header_keys.CONTENT_LENGTH)
+        return int(cl if cl else 0)
+
+    def __set_content_length(self, value: int):
+        value = max(value, 0)
+        self.headers[header_keys.CONTENT_LENGTH] = str(value)
 
     def get_header_string(self) -> bytes:
+        """
+        Returns a binary string with all the response's headers.
+        """
         if not self.protocol:
             raise ValueError("Protocol not set")
-        if header_keys.CONTENT_LENGTH in self.headers:
-            length = self.headers.pop(header_keys.CONTENT_LENGTH)
-        else:
-            length = '0'
         lines = [f"{self.protocol} {self.code} {_get_status_title(self.code)}".encode()]
-        for header, value in self.headers.items():
-            lines.append(f"{_capitalize_header(header)}: {value}".encode())
+        for header in self.first_headers:
+            if header in self.headers:
+                lines.append(f"{_capitalize_header(header)}: {self.headers[header]}".encode())
+        not_middle_keys = set(a.lower() for a in self.first_headers + self.last_headers)
+        for header in self.headers:
+            if header not in not_middle_keys:
+                lines.append(f"{_capitalize_header(header)}: {self.headers[header]}".encode())
         for cookie in self.cookies.values():
             lines.append(f'{header_keys.SET_COOKIE}: {cookie}'.encode())
-        lines.append(f'{header_keys.CONTENT_LENGTH}: {length}'.encode())
+        for header in self.last_headers:
+            if header in self.headers:
+                lines.append(f"{_capitalize_header(header)}: {self.headers[header]}".encode())
         lines.append(b'\r\n')
         return b'\r\n'.join(lines)
 
-    @property
-    def chunk_size(self):
-        return self.__chunk_size
+    def remove_header(self, key: str):
+        if key in self.headers:
+            del self.headers[key]
 
     @property
     def content_type(self):
@@ -236,21 +336,43 @@ class HttpResponse:
     def content_type(self, value: str):
         self.headers[header_keys.CONTENT_TYPE] = value
 
-    def set_body(self, body: Optional[IO], size: int):
+    def _set_chunked(self):
+        self.remove_header(header_keys.CONTENT_LENGTH)
+        te = self.headers.get(header_keys.TRANSFER_ENCODING)
+        if not te:
+            self.headers[header_keys.TRANSFER_ENCODING] = 'chunked'
+        elif 'chunked' not in te:
+            self.headers[header_keys.TRANSFER_ENCODING] = te + ',chunked'
+
+    def _un_chunked(self):
+        te = self.headers.get(header_keys.TRANSFER_ENCODING)
+        if not te:
+            return
+        if 'chunked' in te:
+            te = te.lower().split(',')
+            te.remove('chunked')
+            te = ','.join(te)
+            if not te:
+                del self.headers[header_keys.TRANSFER_ENCODING]
+            else:
+                self.headers[header_keys.TRANSFER_ENCODING] = te
+
+    def set_body_stream(self, body, size: int = None):
         """
-        Set the Response body with content of a known length
-        :param body: the body itself
-        :param size: length of the body
+        Set the Response body
+        :param body: An object that must contain a read() method, with a size argument
+        :param size: length of the body. IF not provided, the response will be chunked
         """
-        if header_keys.TRANSFER_ENCODING in self.headers:
-            del self.headers[header_keys.TRANSFER_ENCODING]
-        self.__chunk_size = 0
         self.__body = body
-        self.headers[header_keys.CONTENT_LENGTH] = str(size)
+        if size:
+            self.__set_content_length(size)
+            self._un_chunked()
+        else:
+            self._set_chunked()
 
     @property
     def is_chunked(self) -> bool:
-        return self.__chunk_size > 0
+        return header_keys.TRANSFER_ENCODING in self.headers
 
     @property
     def keep_connection(self):
@@ -265,14 +387,8 @@ class HttpResponse:
         else:
             self.headers[header_keys.CONNECTION] = 'Close'
 
-    def set_body_chunked(self, body: IO, chunk_size=1024):
-        self.__body = body
-        self.__chunk_size = chunk_size
-        te = self.headers.get(header_keys.TRANSFER_ENCODING)
-        self.headers[header_keys.TRANSFER_ENCODING] = f'{te.strip()}, chunked' if te else 'chunked'
-
     @property
-    def body(self) -> IO:
+    def body(self):
         return self.__body
 
     def add_cookie(self, name: str, value: str, path='/',
@@ -282,34 +398,7 @@ class HttpResponse:
                     HttpCookie(name, value, path, expire_date, max_age, http_only, secure, same_site, domain)
 
 
-def make_response(body=None, headers=None, code=200):
-    """
-    Generartes a response
-    :param body:
-    :param headers:
-    :param code:
-    :return:
-    """
-    resp = HttpResponse(code)
-    if headers:
-        resp.headers.update(headers)
-    if not body:
-        return resp
-    elif isinstance(body, str):
-        body = body.encode()
-        resp.set_body(io.BytesIO(body), len(body))
-        resp.content_type = content_types.TEXT_PLAIN
-    elif isinstance(body, (bytes, bytearray)):
-        resp.set_body(io.BytesIO(body), len(body))
-        resp.content_type = content_types.OCTET_STREAM
-    else:
-        json = myjson.serialize_JSON(body).encode()
-        resp.set_body(io.BytesIO(json), len(json))
-        resp.content_type = content_types.JSON
-    return resp
-
-
-def file_response(src: Union[str, IO], name=None, attachment=False,
+def file_response(src: Union[str, BinaryIO], name=None, attachment=False,
                   content_type=None, last_modified: datetime.datetime = None):
     """
     Returns a response with a file
@@ -354,5 +443,5 @@ def file_response(src: Union[str, IO], name=None, attachment=False,
     if length:
         resp.set_body(stream, length)
     else:
-        resp.set_body_chunked(stream)
+        resp.set_body(stream)
     return resp

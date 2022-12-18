@@ -1,7 +1,7 @@
 import io
 import socket
 import traceback
-
+from typing import Callable
 from utils import BufferedSocket
 from mhttp import ServerSocketWrapper
 from concurrent.futures import ThreadPoolExecutor
@@ -19,11 +19,16 @@ def default_logger(error: Exception):
 
 
 class HttpServer:
-    server_name = ''
+    server_name = 'myserver'
 
-    def __init__(self, handler, logger=None):
+    def __init__(self, handler: Callable, logger: Callable = None):
+        """
+        Initializes an HttpServer instance
+        :param handler: a callable object that takes an HttpRequest and returns an HttpResponse
+        :param logger: callable object for logging errors
+        """
         if callable(handler):
-            self.handler = handler
+            self.handler: Callable[[HttpRequest], HttpResponse] = handler
         else:
             raise ValueError("handler must be a callable object")
         if callable(logger):
@@ -31,17 +36,17 @@ class HttpServer:
         else:
             self.log_error = default_logger
 
-    def error_resp(self, code: int, protocol: str, error: Exception = None):
+    def add_server_name(self, resp: HttpResponse):
+        if self.server_name:
+            resp.headers[header_keys.SERVER] = self.server_name
+
+    def error_resp(self, code: int, protocol: str, error: Exception):
         msg = None
         if error and error.args:
             msg = str(error.args[0])
-        resp = HttpResponse(code)
+        resp = HttpResponse(msg, code)
         resp.protocol = protocol
-        if self.server_name:
-            resp.headers[header_keys.SERVER] = self.server_name
-        msg = msg.encode()
-        if msg:
-            resp.set_body(io.BytesIO(msg), len(msg))
+        self.add_server_name(resp)
         return resp
 
     def handle_request(self, request: HttpRequest) -> HttpResponse:
@@ -66,6 +71,7 @@ class HttpServer:
                 try:
                     response = self.handle_request(request)
                     response.protocol = request.protocol
+                    self.add_server_name(response)
                 except HttpError as e:
                     ssw.send_response(self.error_resp(e.code, protocol, e))
                     break

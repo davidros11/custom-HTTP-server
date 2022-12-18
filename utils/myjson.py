@@ -2,6 +2,7 @@ import random
 from abc import ABC, abstractmethod
 import time
 from typing import Any
+from collections.abc import Mapping, Sequence, Set
 MAX_JSON_LENGTH = 2*1024*1024
 
 
@@ -10,7 +11,8 @@ class JSONSerializable(ABC):
     Class for JSON serializable objects. Override the method for custom JSON parsing.
     """
     @abstractmethod
-    def to_dict(self):
+    def to_json(self) -> str:
+        """ Converts object to JSON """
         pass
 
 
@@ -253,18 +255,35 @@ def _write_num(num: int) -> str:
     return str(num)
 
 
-def _write_list(lst: list) -> str:
+def _write_sequence(seq: Sequence) -> str:
     """ Converts a list into a JSON string. """
-    build = [f"[{serialize_JSON(lst[0])}"]
-    for item in lst[1:]:
-        build.append(f", {serialize_JSON(item)}")
+    if len(seq) == 0:
+        return '[]'
+    build = [f"[{serialize_JSON(seq[0])}"]
+    for index in range(1, len(seq)):
+        build.append(f", {serialize_JSON(seq[index])}")
     build.append(']')
     return ''.join(build)
 
 
-def _write_set(obj: set) -> str:
+def _write_set(s: Set) -> str:
+    """ Converts a list into a JSON string. """
+    iterator = iter(s)
+    try:
+        build = [f"[{serialize_JSON(next(iterator))}"]
+    except StopIteration:
+        return '[]'
+    while True:
+        try:
+            build.append(f", {serialize_JSON(next(iterator))}")
+        except StopIteration:
+            build.append(']')
+            return ''.join(build)
+
+
+def _write_cast_to_list(obj) -> str:
     """ Converts a set into JSON format. """
-    return _write_list(list(obj))
+    return _write_sequence(list(obj))
 
 
 def _write_bool(boolean: bool) -> str:
@@ -272,9 +291,11 @@ def _write_bool(boolean: bool) -> str:
     return str(boolean).lower()
 
 
-def _write_dict(diction: dict) -> str:
+def _write_mapping(diction: Mapping) -> str:
     """Converts a dictionary into a JSON string. """
     keys = list(diction.keys())
+    if not keys:
+        return '{}'
     build = [f"{{{_write_str(keys[0])}: {serialize_JSON(diction[keys[0]])}"]
     for key in keys[1:]:
         build.append(f", {_write_str(key)}: {serialize_JSON(diction[key])}")
@@ -282,15 +303,28 @@ def _write_dict(diction: dict) -> str:
     return ''.join(build)
 
 
-_writer_dict = {
+_common_types = {
+    type(None): lambda a: 'null',
     int: _write_num,
     float: _write_num,
     bool: _write_bool,
     str: _write_str,
-    list: _write_list,
+    list: _write_sequence,
+    dict: _write_mapping,
+    tuple: _write_sequence,
     set: _write_set,
-    dict: _write_dict,
-    tuple: _write_list
+    bytes: _write_cast_to_list,
+    bytearray: _write_cast_to_list,
+    range: _write_cast_to_list
+}
+
+_more_types = {
+    str: _write_str,
+    Mapping: _write_mapping,
+    Sequence: _write_sequence,
+    Set: _write_set,
+    int: _write_num,
+    float: _write_num,
 }
 
 
@@ -298,20 +332,21 @@ def serialize_JSON(value) -> str:
     """
     Converts an object into a JSON string
     """
-    if value is None:
-        return "null"
     t = type(value)
-    if t in _writer_dict.keys():
-        return _writer_dict[t](value)
-    elif not hasattr(value, '__dict__'):
+    if t in _common_types.keys():
+        return _common_types[t](value)
+    for key in _more_types.keys():
+        if isinstance(value, key):
+            return _more_types[key](value)
+    if not hasattr(value, '__dict__'):
         raise TypeError(f"Type {t} not supported")
     elif issubclass(t, JSONSerializable):
-        return _write_dict(value.to_dict())
+        return _write_mapping(value.to_json())
     # Default serialization. Serialize all non private class and instance attributes
-    fields = {key: value for key, value in vars(t).items() if not key.startswith('_') # ._dict_.items()
+    fields = {key: value for key, value in vars(t).items() if not key.startswith('_')
               and not callable(getattr(t, key))}
-    fields.update(vars(value))
-    return _write_dict(fields)
+    fields.update({key: value for key, value in vars(value).items() if not key.startswith('_')})
+    return _write_mapping(fields)
 
 
 class _A:
