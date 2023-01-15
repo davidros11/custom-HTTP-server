@@ -1,16 +1,22 @@
 import os
-from mhttp import HttpRequest, HttpResponse, file_response, HttpServer
+from mhttp import HttpRequest, HttpResponse, HttpContext, file_response, HttpServer
 from mhttp.constants import content_types
 
 
-def test(request: HttpRequest):
+def test(context: HttpContext):
+    request = context.request
     if request.method == 'POST':
-        return post_test(request)
+        return post_test(context)
     elif request.method == 'GET':
-        return get_test(request)
+        return get_test(context)
 
 
-def post_test(request: HttpRequest):
+def post_test(context: HttpContext):
+    if not context.session:
+        context.session['user'] = 'bob'
+    else:
+        print('you are', context.session['user'])
+    request = context.request
     t = request.content_type
     if not t:
         t = content_types.OCTET_STREAM
@@ -33,13 +39,13 @@ def post_test(request: HttpRequest):
     return resp
 
 
-def get_test(request: HttpRequest):
-    return file_response('file.txt')
+def get_test(context: HttpContext):
+    return file_response('file.txt', attachment=False)
 
 
 def main():
     server = HttpServer(test)
-    server.run()
+    server.run(certs=(os.path.join('certs', 'rosenbdc.crt'), os.path.join('certs', 'rosenbdc.key')))
 
 
 if __name__ == '__main__':

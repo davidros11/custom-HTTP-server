@@ -1,10 +1,10 @@
 import os
 import shutil
 import sys
+import mimetypes
 from typing import IO, AnyStr, List, Iterator, Callable
 from utils.mcollections import FifoBuffer, CaseInsensitiveDict, ReadOnlyDict
 from mhttp.constants import content_types, header_keys, status_codes
-import mimetypes
 from mhttp.helpers import is_text, get_header_param, HttpError
 
 

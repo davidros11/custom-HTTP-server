@@ -1,13 +1,15 @@
-import io
+import select
 import socket
 import traceback
 from typing import Callable
+from concurrent.futures import ThreadPoolExecutor
+import ssl
 from utils import BufferedSocket
 from mhttp import ServerSocketWrapper
-from concurrent.futures import ThreadPoolExecutor
-from mhttp.messages import HttpResponse, HttpRequest
 from mhttp.helpers import HttpError
 from mhttp.constants import header_keys, status_codes, content_types
+from mhttp.session import SessionManager
+from mhttp import HttpContext, HttpResponse, HttpRequest
 HTTP1_1 = 'HTTP/1.1'
 HTTP2 = 'HTTP/2'
 
@@ -24,9 +26,10 @@ class HttpServer:
     def __init__(self, handler: Callable, logger: Callable = None):
         """
         Initializes an HttpServer instance
-        :param handler: a callable object that takes an HttpRequest and returns an HttpResponse
+        :param handler: a callable object that takes an HttpContext and returns an HttpResponse
         :param logger: callable object for logging errors
         """
+        self.sessions = SessionManager(20*60)
         if callable(handler):
             self.handler: Callable[[HttpRequest], HttpResponse] = handler
         else:
@@ -40,7 +43,7 @@ class HttpServer:
         if self.server_name:
             resp.headers[header_keys.SERVER] = self.server_name
 
-    def error_resp(self, code: int, protocol: str, error: Exception):
+    def error_resp(self, code: int, protocol: str, error: Exception = None):
         msg = None
         if error and error.args:
             msg = str(error.args[0])
@@ -50,7 +53,18 @@ class HttpServer:
         return resp
 
     def handle_request(self, request: HttpRequest) -> HttpResponse:
-        return self.handler(request)
+        session_key = request.cookies.get('Session')
+        if not session_key:
+            session = dict()
+        else:
+            session = self.sessions.get_session(session_key)
+            session = session if session is not None else dict()
+        context = HttpContext(request, session)
+        response: HttpResponse = self.handler(context)
+        if context.session and session_key is None:
+            session_key = self.sessions.add_session(context.session)
+            response.add_cookie('Session', session_key, http_only=True)
+        return response
 
     def handle_client(self, sock: socket.socket, protocol):
         with BufferedSocket(sock) as sock:
@@ -88,18 +102,34 @@ class HttpServer:
                     break
                 if not response.keep_connection:
                     break
+        sock.close()
 
-    def handle_http_client(self, sock: socket.socket):
+    def handle_http11_client(self, sock: socket.socket):
         self.handle_client(sock,  HTTP1_1)
 
-    def handle_https_client(self, sock: socket.socket):
-        pass
+    def handle_http2_client(self, sock: socket.socket):
+        self.handle_client(sock,  HTTP2)
 
-    def run(self):
+    def run(self, ip='0.0.0.0', http_port=5400, https_port=5401, certs=None):
         executor = ThreadPoolExecutor(max_workers=20)
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.bind(('0.0.0.0', 5400))
+        listener.bind((ip, http_port))
         listener.listen(8)
+        sockets = [listener]
+        if certs:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.set_alpn_protocols(['http/1.1'])
+            context.load_cert_chain(certs[0], certs[1])
+            tls_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tls_listener.bind((ip, https_port))
+            tls_listener.listen(8)
+            sockets.append(context.wrap_socket(tls_listener))
         while True:
-            conn, addr = listener.accept()
-            executor.submit(self.handle_http_client, conn)
+            readable, _, _ = select.select(sockets, [], [])
+            for sock in readable:
+                try:
+                    conn, addr = sock.accept()
+                    executor.submit(self.handle_http11_client, conn)
+                except ssl.SSLError as e:
+                    print(e)
+

@@ -1,7 +1,6 @@
-from __future__ import annotations
-from utils.mcollections import FifoBuffer
 import socket
 import time
+from utils.mcollections import FifoBuffer
 
 
 class BufferedSocket:
@@ -35,7 +34,6 @@ class BufferedSocket:
             index = received.find(b'\n')
             if index != -1:
                 line.extend(received[:index])
-                a = line[-1]
                 if line[-1] == ord('\r'):
                     line.pop()
                 self.buffer.push(received[index+1:])

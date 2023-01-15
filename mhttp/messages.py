@@ -1,26 +1,25 @@
 import datetime
-import inspect
 import io
 import mimetypes
 import os
+from io import BufferedIOBase
 from wsgiref.handlers import format_date_time
 from typing import Optional, List, Dict, Union, BinaryIO
 from functools import cached_property
 from utils.mcollections.mydicts import CaseInsensitiveDict
 from utils.mcollections import ReadOnlyDict
-from mhttp.constants import status_codes, header_keys, content_types
 from utils import myjson
+from mhttp.constants import status_codes, header_keys, content_types
 from mhttp.helpers import is_text, get_header_param, HttpError
 from mhttp.form import FormReader, parse_form, FormFile, CopiedFile
 from mhttp.files import TempFile
-from io import BufferedIOBase
 
 
 class HttpCookie:
 
     def __init__(self, name: str, value: str,
-                 path='/', expire_date=None, max_age=None, http_only=False, secure=False,
-                 same_site='Lax', domain=None):
+                 path='/', expire_date: datetime.datetime = None, max_age=None, http_only=False,
+                 secure=False, same_site='Lax', domain=None):
         if not secure and same_site == 'None':
             raise ValueError("Cookies with same site None must be Secure.")
         if same_site not in {'Lax', 'Strict', 'None'}:
@@ -29,7 +28,10 @@ class HttpCookie:
         self.max_age = max_age
         self.value = value
         self.path = path
-        self.expire_date = expire_date.timestamp()
+        if expire_date:
+            self.expire_date = expire_date.timestamp()
+        else:
+            self.expire_date = None
         self.http_only = http_only
         self.secure = secure
         self.same_site = same_site
@@ -70,6 +72,7 @@ class HttpRequest:
         self.headers: ReadOnlyDict[str, str] = ReadOnlyDict(CaseInsensitiveDict(headers))
         self.cookies: ReadOnlyDict[str, str] = ReadOnlyDict(cookies)
         self.args: ReadOnlyDict[str, str] = ReadOnlyDict(args)
+        self.route_vars: ReadOnlyDict[str, str] = ReadOnlyDict()
         self.body = body
         self.__form = None
         self.__files = None
@@ -393,7 +396,7 @@ class HttpResponse:
 
     def add_cookie(self, name: str, value: str, path='/',
                    expire_date=None, max_age=None, http_only=False,
-                   secure=False, same_site='LAX', domain=None):
+                   secure=False, same_site='Lax', domain=None):
         self.cookies[name] = \
                     HttpCookie(name, value, path, expire_date, max_age, http_only, secure, same_site, domain)
 

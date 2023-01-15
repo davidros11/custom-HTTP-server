@@ -1,7 +1,7 @@
 import random
-from abc import ABC, abstractmethod
 import time
 from typing import Any
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence, Set
 MAX_JSON_LENGTH = 2*1024*1024
 
