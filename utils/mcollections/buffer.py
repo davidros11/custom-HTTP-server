@@ -71,7 +71,6 @@ class FifoBuffer:
     def pop_line(self):
         """ Returns and removes a line from the array """
         return self.pop_until(b'\n')
-
     def __reposition(self):
         """ Repositions the contents of the buffer to the start of the internal array """
         length = len(self)
