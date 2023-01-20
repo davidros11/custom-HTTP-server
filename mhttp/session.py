@@ -36,14 +36,23 @@ class SessionManager:
         return session_key
 
     def set_session(self, session_key: str, session_data: dict):
+        if not isinstance(session_key, str):
+            return
         key_hash = self.b64hash(session_key)
         self.__dict[key_hash] = session_data
 
     def get_session(self, session_key: str):
-        if session_key is None:
+        if not isinstance(session_key, str):
             return None
         return self.__dict.get(self.b64hash(session_key))
 
     def delete_session(self, session_key: str):
+        if not isinstance(session_key, str):
+            return
         key_hash = self.b64hash(session_key)
         self.__dict.delete(key_hash)
+
+    def __contains__(self, session_key: str):
+        if not isinstance(session_key, str):
+            return False
+        return session_key in self.__dict

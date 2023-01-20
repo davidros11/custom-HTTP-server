@@ -1,17 +1,17 @@
 import io
 import socket
-from mhttp.constants import status_codes, header_keys, content_types
-from mhttp import HttpRequest, HttpResponse
-from mhttp.helpers import HttpError
-from mhttp.files import TempFileFactory
 import time
 import pprint
-from utils import BufferedSocket
-from typing import IO
+from typing import IO, List
 from abc import ABC
+from mhttp import HttpRequest, HttpResponse
+from mhttp.constants import status_codes, header_keys, content_types
+from mhttp.helpers import HttpError
+from mhttp.files import TempFileFactory
+from utils import BufferedSocket
 
 
-methods = {"GET", "POST", "HEAD", "PUT", "DELETE", "TRACE", "PATCH", "OPTIONS", "CONNECT"}
+methods = {"GET", "POST", "HEAD", "PUT", "DELETE", "TRACE", "PATCH", "OPTIONS", "CONNECT", "COPY"}
 
 
 def split_two(string: str, splitter: str):
@@ -69,11 +69,14 @@ class HttpSocketWrapper(ABC):
         self._remaining_time = self.request_timeout
         self._remaining_size = self.max_content_length
         self._remaining_header_size = self.max_headers_size
+        self.__socket.settimeout(self._remaining_time)
 
     def __read_from_socket(self, bytes_to_read: int) -> bytes:
+        self.__socket.settimeout(self._remaining_time)
         return self.__read_stuff(self.__socket.read, bytes_to_read)
 
     def read_line(self, limit) -> bytes:
+        self.__socket.settimeout(self._remaining_time)
         return self.__read_stuff(self.__socket.read_line, limit)
 
     def __read_stuff(self, reader, limit):
@@ -147,14 +150,23 @@ class HttpSocketWrapper(ABC):
     def fileno(self):
         return self.__socket.fileno()
 
-    def _send(self, stuff: IO):
-        while True:
-            to_send = stuff.read(1024)
-            if not to_send:
-                return
-            self.__socket.send(to_send)
+    def _send(self, *args: IO):
+        """
+        Sends data to client
+        :param args: a sequence of streams
+        """
+        remaining = self.request_timeout
+        for stream in args:
+            while True:
+                self.__socket.settimeout(remaining)
+                to_send = stream.read(1024)
+                if not to_send:
+                    break
+                start = time.perf_counter()
+                self.__socket.send(to_send)
+                remaining -= start - time.perf_counter()
 
-    def _send_chunked(self, stream: IO,):
+    def _send_chunked(self, stream: IO):
         while True:
             read = stream.read(self.chunk_size)
             length = len(read)
@@ -180,7 +192,7 @@ class ServerSocketWrapper(HttpSocketWrapper):
         if len(x) == 2:
             args = dict(split_two(item, '=') for item in x[1].split("&"))
         if method not in methods:
-            raise ValueError(status_codes.BAD_REQUEST, "Method name invalid")
+            raise HttpError(status_codes.BAD_REQUEST, "Method name invalid")
         for line in header_strings[1:]:
             title, content = split_two(line, ':')
             if title == "Cookie":

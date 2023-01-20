@@ -76,7 +76,7 @@ class HttpRequest:
         self.body = body
         self.__form = None
         self.__files = None
-        self.__json = None
+        self.__json: Optional[dict] = None
 
     def delete(self):
         if self.body:
@@ -96,7 +96,7 @@ class HttpRequest:
     def json(self):
         if self.__json:
             return self.__json
-        if not self.content_type == content_types.JSON:
+        if not (self.content_type == content_types.JSON):
             return None
         elif self.body.size > myjson.MAX_JSON_LENGTH:
             raise HttpError(status_codes.PAYLOAD_TOO_LARGE, "JSON too large!")
@@ -399,6 +399,12 @@ class HttpResponse:
                    secure=False, same_site='Lax', domain=None):
         self.cookies[name] = \
                     HttpCookie(name, value, path, expire_date, max_age, http_only, secure, same_site, domain)
+
+    def delete(self):
+        """
+        Frees any unmanaged resources.
+        """
+        self.body.close()
 
 
 def file_response(src: Union[str, BinaryIO], name=None, attachment=False,

@@ -26,7 +26,7 @@ class HttpServer:
     def __init__(self, handler: Callable, logger: Callable = None):
         """
         Initializes an HttpServer instance
-        :param handler: a callable object that takes an HttpContext and returns an HttpResponse
+        :param handler: a callable object that takes an HttpContext and returns an appropriate HttpResponse object.
         :param logger: callable object for logging errors
         """
         self.sessions = SessionManager(20*60)
@@ -61,7 +61,9 @@ class HttpServer:
             session = session if session is not None else dict()
         context = HttpContext(request, session)
         response: HttpResponse = self.handler(context)
-        if context.session and session_key is None:
+        if not context.session:
+            self.sessions.delete_session(session_key)
+        elif session_key is None or session_key not in self.sessions:
             session_key = self.sessions.add_session(context.session)
             response.add_cookie('Session', session_key, http_only=True)
         return response
@@ -100,18 +102,23 @@ class HttpServer:
                 except Exception as e:
                     self.log_error(e)
                     break
+                finally:
+                    response.delete()
                 if not response.keep_connection:
                     break
-        sock.close()
 
-    def handle_http11_client(self, sock: socket.socket):
+    def _handle_http11_client(self, sock: socket.socket):
         self.handle_client(sock,  HTTP1_1)
 
-    def handle_http2_client(self, sock: socket.socket):
-        self.handle_client(sock,  HTTP2)
-
     def run(self, ip='0.0.0.0', http_port=5400, https_port=5401, certs=None):
-        executor = ThreadPoolExecutor(max_workers=20)
+        """
+        Runs the server.
+        :param ip: The IP Address the server will answer to
+        :param http_port: port for HTTP connections
+        :param https_port: port for HTTPS  connections
+        :param certs: a tuple containing the certificate file path, and private key path respectively.
+        """
+        executor = ThreadPoolExecutor()
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind((ip, http_port))
         listener.listen(8)
@@ -129,7 +136,8 @@ class HttpServer:
             for sock in readable:
                 try:
                     conn, addr = sock.accept()
-                    executor.submit(self.handle_http11_client, conn)
+                    conn.setblocking(True)
+                    executor.submit(self._handle_http11_client, conn)
                 except ssl.SSLError as e:
                     print(e)
 
