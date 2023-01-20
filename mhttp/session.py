@@ -55,4 +55,4 @@ class SessionManager:
     def __contains__(self, session_key: str):
         if not isinstance(session_key, str):
             return False
-        return session_key in self.__dict
+        return self.b64hash(session_key) in self.__dict
